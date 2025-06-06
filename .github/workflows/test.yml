@@ -1,0 +1,74 @@
+name: Smart Contract CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'script/**'
+      - 'foundry.toml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'script/**'
+      - 'foundry.toml'
+  workflow_dispatch:
+
+env:
+  FOUNDRY_PROFILE: ci
+  MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+  TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+
+jobs:
+  check:
+    name: Foundry project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Show Forge version
+        run: forge --version
+
+      - name: Run Forge fmt
+        run: forge fmt --check
+        id: fmt
+
+      - name: Run Forge build
+        run: forge build --sizes
+        id: build
+        
+      - name: Run Slither Static Analysis
+        uses: crytic/slither-action@v0.3.0
+        id: slither
+        continue-on-error: true
+        with:
+          target: src/
+          slither-args: --exclude-dependencies
+
+      - name: Run Forge tests
+        run: forge test -vvv
+        id: test
+        
+      - name: Run Gas Snapshot
+        run: forge snapshot --check
+        id: gas
+        
+      - name: Run Coverage Report
+        run: forge coverage --report lcov
+        id: coverage
+        
+      - name: Upload Coverage Report
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./lcov.info
+          fail_ci_if_error: false

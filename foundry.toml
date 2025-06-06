@@ -1,0 +1,32 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc = "0.8.20"
+optimizer = true
+optimizer_runs = 200
+gas_reports = ["*"]
+verbosity = 3
+fuzz = { runs = 1000 }
+via_ir = false
+remappings = [
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+    "@openzeppelin-upgradeable/=lib/openzeppelin-contracts-upgradeable/",
+    "@chainlink/=lib/chainlink-brownie-contracts/contracts/"
+]
+
+[profile.ci]
+fuzz = { runs = 10000 }
+verbosity = 4
+
+[profile.optimized]
+via_ir = true
+optimizer = true
+optimizer_runs = 1000000
+
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+testnet = "${TESTNET_RPC_URL}"
+anvil = "http://127.0.0.1:8545"
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
