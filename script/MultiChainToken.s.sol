@@ -19,7 +19,7 @@ contract DeployMultiChainToken is Script {
         MultiChainToken token = new MultiChainToken(
             "Multi Chain Token",
             "MCT",
-            1000000 * 10**18 // 1 million tokens with 18 decimals
+            1000000 * 10 ** 18 // 1 million tokens with 18 decimals
         );
 
         vm.stopBroadcast();
@@ -37,21 +37,18 @@ contract DeployMultiChainTokenProxy is Script {
 
         // Deploy implementation
         MultiChainTokenProxy implementation = new MultiChainTokenProxy();
-        
+
         // Encode initialization data
         bytes memory initData = abi.encodeWithSelector(
             MultiChainTokenProxy.initialize.selector,
             "Multi Chain Token",
             "MCT",
-            1000000 * 10**18 // 1 million tokens with 18 decimals
+            1000000 * 10 ** 18 // 1 million tokens with 18 decimals
         );
-        
+
         // Deploy proxy
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(implementation),
-            initData
-        );
-        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+
         // The proxy address is what users will interact with
         MultiChainTokenProxy tokenProxy = MultiChainTokenProxy(address(proxy));
 
