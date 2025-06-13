@@ -1,0 +1,471 @@
+name: Smart Contract CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'script/**'
+      - 'foundry.toml'
+      - 'remappings.txt'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'script/**'
+      - 'foundry.toml'
+      - 'remappings.txt'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+env:
+  FOUNDRY_PROFILE: ci
+  MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+  TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+  FOUNDRY_FUZZ_RUNS: 10000
+  FOUNDRY_FUZZ_MAX_TEST_REJECTS: 65536
+  FOUNDRY_INVARIANT_RUNS: 256
+  FOUNDRY_INVARIANT_DEPTH: 15
+
+jobs:
+  lint-and-format:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Check code format
+        run: |
+          forge fmt --check
+          echo "✅ All files are formatted correctly."
+
+      - name: Show Foundry config
+        run: forge config
+
+  build-and-compile:
+    name: Build & Compile
+    runs-on: ubuntu-latest
+    needs: lint-and-format
+    outputs:
+      contract-sizes: ${{ steps.sizes.outputs.sizes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Build contracts
+        run: |
+          forge clean
+          forge build --sizes
+        id: build
+
+      - name: Check contract sizes
+        id: sizes
+        run: |
+          echo "Checking contract sizes..."
+          forge build --sizes | tee contract-sizes.txt
+          
+          # Check if any contract exceeds 24KB (Ethereum contract size limit)
+          if forge build --sizes | grep -E '\s+2[4-9][0-9]{3}|\s+[3-9][0-9]{4}|\s+[0-9]{6,}'; then
+            echo "⚠️ Warning: Some contracts are approaching or exceeding the 24KB size limit"
+            echo "sizes=warning" >> $GITHUB_OUTPUT
+          else
+            echo "✅ All contracts are within size limits"
+            echo "sizes=ok" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            out/
+            contract-sizes.txt
+          retention-days: 7
+
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: build-and-compile
+    strategy:
+      matrix:
+        test-type: [unit, integration, fuzz]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Run unit tests
+        if: matrix.test-type == 'unit'
+        run: |
+          forge test --match-path "test/unit/**/*.sol" -vvv
+        id: unit-test
+
+      - name: Run integration tests
+        if: matrix.test-type == 'integration'
+        run: |
+          forge test --match-path "test/integration/**/*.sol" -vvv
+        id: integration-test
+
+      - name: Run fuzz tests
+        if: matrix.test-type == 'fuzz'
+        run: |
+          forge test --match-path "test/fuzz/**/*.sol" -vvv
+        id: fuzz-test
+
+  test-invariant:
+    name: Invariant Tests
+    runs-on: ubuntu-latest
+    needs: build-and-compile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Run invariant tests
+        run: |
+          forge test --match-path "test/invariant/**/*.sol" -vvv
+        continue-on-error: true
+
+  coverage:
+    name: Test Coverage
+    runs-on: ubuntu-latest
+    needs: [test-unit, test-invariant]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Generate coverage report
+        run: |
+          forge coverage --report lcov --report summary
+          forge coverage --report html
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./lcov.info
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+  security-analysis:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-compile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Run Slither analysis
+        uses: crytic/slither-action@v0.4.0
+        continue-on-error: true
+        id: slither
+        with:
+          target: 'src/'
+          slither-args: '--exclude-dependencies --exclude-informational --exclude naming-convention --exclude-low --json slither-report.json'
+          sarif: slither-results.sarif
+          fail-on: none
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: slither-results.sarif
+
+      - name: Upload Slither report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slither-report
+          path: |
+            slither-report.json
+            slither-results.sarif
+          retention-days: 30
+
+  gas-analysis:
+    name: Gas Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-compile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Generate gas report
+        run: |
+          forge test --gas-report > gas-report.txt
+          echo "## Gas Report" >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          cat gas-report.txt >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate gas snapshot
+        run: |
+          forge snapshot --check || forge snapshot
+          echo "## Gas Snapshot Changes" >> $GITHUB_STEP_SUMMARY
+          if [ -f .gas-snapshot ]; then
+            echo '' >> $GITHUB_STEP_SUMMARY
+            git diff .gas-snapshot >> $GITHUB_STEP_SUMMARY || echo "No changes in gas usage" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload gas reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-analysis
+          path: |
+            gas-report.txt
+            .gas-snapshot
+          retention-days: 30
+
+  storage-layout:
+    name: Storage Layout Check
+    runs-on: ubuntu-latest
+    needs: build-and-compile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Check storage layouts
+        run: |
+          echo "## Storage Layouts" >> $GITHUB_STEP_SUMMARY
+          
+          # Check MultiChainToken storage layout
+          if [ -f "src/tokens/MultiChainToken.sol" ]; then
+            echo "### MultiChainToken Storage Layout" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            forge inspect src/tokens/MultiChainToken.sol:MultiChainToken storage --pretty >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check proxy storage layout
+          if [ -f "src/proxy/MultiChainTokenProxy.sol" ]; then
+            echo "### MultiChainTokenProxy Storage Layout" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            forge inspect src/proxy/MultiChainTokenProxy.sol:MultiChainTokenProxy storage --pretty >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  deployment-simulation:
+    name: Deployment Simulation
+    runs-on: ubuntu-latest
+    needs: [test-unit, security-analysis]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.foundry
+            lib
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Install dependencies
+        run: forge install
+        continue-on-error: false
+
+      - name: Simulate deployment
+        run: |
+          # Start anvil in background
+          anvil --fork-url ${{ secrets.MAINNET_RPC_URL }} --port 8545 &
+          ANVIL_PID=$!
+          
+          # Wait for anvil to start
+          sleep 5
+          
+          # Run deployment simulation
+          forge script script/MultiChainToken.s.sol:DeployMultiChainToken --rpc-url http://localhost:8545 --broadcast --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+          
+          # Kill anvil
+          kill $ANVIL_PID
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, build-and-compile, test-unit, test-invariant, coverage, security-analysis, gas-analysis, storage-layout]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check job statuses
+          if [ "${{ needs.lint-and-format.result }}" == "success" ]; then
